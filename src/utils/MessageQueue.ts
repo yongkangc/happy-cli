@@ -1,23 +1,12 @@
+import { SDKMessage, SDKUserMessage } from "@/claude/sdk";
 import { logger } from "@/ui/logger";
-
-/**
- * User message type for the queue - matches Claude Code SDK protocol
- */
-interface UserMessage {
-    type: 'user';
-    message: {
-        role: 'user';
-        content: string;
-    };
-    parent_tool_use_id?: string;
-}
 
 /**
  * An async iterable message queue that allows pushing messages and consuming them asynchronously
  */
-export class MessageQueue implements AsyncIterable<UserMessage> {
-    private queue: UserMessage[] = [];
-    private waiters: Array<(value: UserMessage) => void> = [];
+export class MessageQueue implements AsyncIterable<SDKUserMessage> {
+    private queue: SDKUserMessage[] = [];
+    private waiters: Array<(value: SDKUserMessage) => void> = [];
     private closed = false;
     private closePromise?: Promise<void>;
     private closeResolve?: () => void;
@@ -47,7 +36,6 @@ export class MessageQueue implements AsyncIterable<UserMessage> {
                     role: 'user',
                     content: message,
                 },
-                parent_tool_use_id: undefined,
             });
         } else {
             logger.debug(`[MessageQueue] No waiter found. Adding to queue: "${message}"`);
@@ -57,7 +45,6 @@ export class MessageQueue implements AsyncIterable<UserMessage> {
                     role: 'user',
                     content: message,
                 },
-                parent_tool_use_id: undefined,
             });
         }
         
@@ -90,7 +77,7 @@ export class MessageQueue implements AsyncIterable<UserMessage> {
     /**
      * Async iterator implementation
      */
-    async *[Symbol.asyncIterator](): AsyncIterator<UserMessage> {
+    async *[Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
         logger.debug(`[MessageQueue] Iterator started`);
         while (true) {
             const message = this.queue.shift();
@@ -120,7 +107,7 @@ export class MessageQueue implements AsyncIterable<UserMessage> {
     /**
      * Wait for the next message or queue closure
      */
-    private waitForNext(): Promise<UserMessage | undefined> {
+    private waitForNext(): Promise<SDKUserMessage | undefined> {
         return new Promise((resolve) => {
             if (this.closed) {
                 logger.debug(`[MessageQueue] waitForNext() called but queue is closed`);
@@ -128,7 +115,7 @@ export class MessageQueue implements AsyncIterable<UserMessage> {
                 return;
             }
 
-            const waiter = (value: UserMessage) => resolve(value);
+            const waiter = (value: SDKUserMessage) => resolve(value);
             this.waiters.push(waiter);
             logger.debug(`[MessageQueue] waitForNext() adding waiter. Total waiters: ${this.waiters.length}`);
 

@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { resolve, join } from "node:path";
 import { createInterface } from "node:readline";
 import { mkdirSync, existsSync } from "node:fs";
-import { watch } from "node:fs";
 import { logger } from "@/ui/logger";
 import { claudeCheckSession } from "./utils/claudeCheckSession";
 import { getProjectPath } from "./utils/path";
@@ -21,43 +20,35 @@ export async function claudeLocal(opts: {
     onSessionFound: (id: string) => void,
     onThinkingChange?: (thinking: boolean) => void,
     claudeEnvVars?: Record<string, string>,
-    claudeArgs?: string[]
-    allowedTools?: string[]
+    claudeArgs?: string[],
+    allowedTools?: string[],
+    /** Path to temporary settings file with SessionStart hook (required for session tracking) */
+    hookSettingsPath: string
 }) {
 
-    // Start a watcher for to detect the session id
+    // Ensure project directory exists
     const projectDir = getProjectPath(opts.path);
     mkdirSync(projectDir, { recursive: true });
-    const watcher = watch(projectDir);
-    let resolvedSessionId: string | null = null;
-    const detectedIdsRandomUUID = new Set<string>();
-    const detectedIdsFileSystem = new Set<string>();
-    watcher.on('change', (event, filename) => {
-        if (typeof filename === 'string' && filename.toLowerCase().endsWith('.jsonl')) {
-            logger.debug('change', event, filename);
-            const sessionId = filename.replace('.jsonl', '');
-            if (detectedIdsFileSystem.has(sessionId)) {
-                return;
-            }
-            detectedIdsFileSystem.add(sessionId);
 
-            // Try to match
-            if (resolvedSessionId) {
-                return;
-            }
+    // Check if claudeArgs contains --continue or --resume (user passed these flags)
+    const hasContinueFlag = opts.claudeArgs?.includes('--continue');
+    const hasResumeFlag = opts.claudeArgs?.includes('--resume');
+    const hasUserSessionControl = hasContinueFlag || hasResumeFlag;
 
-            // Try to match with random UUID
-            if (detectedIdsRandomUUID.has(sessionId)) {
-                resolvedSessionId = sessionId;
-                opts.onSessionFound(sessionId);
-            }
-        }
-    });
-
-    // Check if session is valid
+    // Determine if we have an existing session to resume
+    // Session ID will always be provided by hook (SessionStart) when Claude starts
     let startFrom = opts.sessionId;
     if (opts.sessionId && !claudeCheckSession(opts.sessionId, opts.path)) {
         startFrom = null;
+    }
+    
+    // Log session strategy
+    if (startFrom) {
+        logger.debug(`[ClaudeLocal] Will resume existing session: ${startFrom}`);
+    } else if (hasUserSessionControl) {
+        logger.debug(`[ClaudeLocal] User passed ${hasContinueFlag ? '--continue' : '--resume'} flag, session ID will be determined by hook`);
+    } else {
+        logger.debug(`[ClaudeLocal] Fresh start, session ID will be provided by hook`);
     }
 
     // Thinking state
@@ -79,9 +70,13 @@ export async function claudeLocal(opts: {
         process.stdin.pause();
         await new Promise<void>((r, reject) => {
             const args: string[] = []
-            if (startFrom) {
+            
+            // Only add --resume if we have an existing session and user didn't pass their own flags
+            // For fresh starts, let Claude create its own session ID (reported via hook)
+            if (!hasUserSessionControl && startFrom) {
                 args.push('--resume', startFrom)
             }
+            
             args.push('--append-system-prompt', systemPrompt);
 
             if (opts.mcpServers && Object.keys(opts.mcpServers).length > 0) {
@@ -97,15 +92,24 @@ export async function claudeLocal(opts: {
                 args.push(...opts.claudeArgs)
             }
 
+            // Add hook settings for session tracking (always passed)
+            args.push('--settings', opts.hookSettingsPath);
+            logger.debug(`[ClaudeLocal] Using hook settings: ${opts.hookSettingsPath}`);
+
             if (!claudeCliPath || !existsSync(claudeCliPath)) {
                 throw new Error('Claude local launcher not found. Please ensure HAPPY_PROJECT_ROOT is set correctly for development.');
             }
 
             // Prepare environment variables
+            // Note: Local mode uses global Claude installation with --session-id flag
+            // Launcher only intercepts fetch for thinking state tracking
             const env = {
                 ...process.env,
                 ...opts.claudeEnvVars
             }
+
+            logger.debug(`[ClaudeLocal] Spawning launcher: ${claudeCliPath}`);
+            logger.debug(`[ClaudeLocal] Args: ${JSON.stringify(args)}`);
 
             const child = spawn('node', [claudeCliPath, ...args], {
                 stdio: ['inherit', 'inherit', 'inherit', 'pipe'],
@@ -114,7 +118,7 @@ export async function claudeLocal(opts: {
                 env,
             });
 
-            // Listen to the custom fd (fd 3) line by line
+            // Listen to the custom fd (fd 3) for thinking state tracking
             if (child.stdio[3]) {
                 const rl = createInterface({
                     input: child.stdio[3] as any,
@@ -126,21 +130,10 @@ export async function claudeLocal(opts: {
 
                 rl.on('line', (line) => {
                     try {
-                        // Try to parse as JSON
                         const message = JSON.parse(line);
 
                         switch (message.type) {
-                            case 'uuid':
-                                detectedIdsRandomUUID.add(message.value);
-
-                                if (!resolvedSessionId && detectedIdsFileSystem.has(message.value)) {
-                                    resolvedSessionId = message.value;
-                                    opts.onSessionFound(message.value);
-                                }
-                                break;
-
                             case 'fetch-start':
-                                // logger.debug(`[ClaudeLocal] Fetch start: ${message.method} ${message.hostname}${message.path} (id: ${message.id})`);
                                 activeFetches.set(message.id, {
                                     hostname: message.hostname,
                                     path: message.path,
@@ -158,7 +151,6 @@ export async function claudeLocal(opts: {
                                 break;
 
                             case 'fetch-end':
-                                // logger.debug(`[ClaudeLocal] Fetch end: id ${message.id}`);
                                 activeFetches.delete(message.id);
 
                                 // Stop thinking when no active fetches
@@ -208,7 +200,6 @@ export async function claudeLocal(opts: {
             });
         });
     } finally {
-        watcher.close();
         process.stdin.resume();
         if (stopThinkingTimeout) {
             clearTimeout(stopThinkingTimeout);
@@ -217,9 +208,5 @@ export async function claudeLocal(opts: {
         updateThinking(false);
     }
 
-    //
-    // Double check that session is correct
-    //
-
-    return resolvedSessionId;
+    return startFrom;
 }

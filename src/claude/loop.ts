@@ -18,6 +18,66 @@ export interface EnhancedMode {
     disallowedTools?: string[];
 }
 
+/**
+ * Map friendly model names to full Claude model identifiers
+ * Allows users to use short names like "sonnet", "opus", "haiku"
+ * Maps to latest Claude 4.5 models by default
+ */
+export function mapClaudeModel(modelName: string | undefined): string | undefined {
+    if (!modelName) {
+        return undefined;
+    }
+
+    // Return as-is if already a full model identifier
+    if (modelName.startsWith('claude-')) {
+        return modelName;
+    }
+
+    // Map friendly names to latest 4.5 versions
+    switch (modelName.toLowerCase()) {
+        case 'opus':
+            return 'claude-opus-4-5-20251101';
+        case 'sonnet':
+            return 'claude-sonnet-4-5-20250929';
+        case 'haiku':
+            return 'claude-haiku-4-5-20251001';
+
+        // Extended support for version-specific requests (4.5)
+        case 'opus-4.5':
+        case 'opus-4-5':
+        case 'opus45':
+            return 'claude-opus-4-5-20251101';
+        case 'sonnet-4.5':
+        case 'sonnet-4-5':
+        case 'sonnet45':
+            return 'claude-sonnet-4-5-20250929';
+        case 'haiku-4.5':
+        case 'haiku-4-5':
+        case 'haiku45':
+            return 'claude-haiku-4-5-20251001';
+
+        // Legacy 4.x and 3.5 versions (for backwards compatibility)
+        case 'opus-4':
+        case 'opus4':
+            return 'claude-opus-4-20250514';
+        case 'sonnet-4':
+        case 'sonnet4':
+            return 'claude-sonnet-4-20250514';
+        case 'sonnet-3.5':
+        case 'sonnet-3-5':
+        case 'sonnet35':
+            return 'claude-sonnet-3-5-20241022';
+        case 'haiku-3.5':
+        case 'haiku-3-5':
+        case 'haiku35':
+            return 'claude-haiku-3-5-20241022';
+
+        // If no mapping found, return as-is (might be a valid model identifier)
+        default:
+            return modelName;
+    }
+}
+
 interface LoopOptions {
     path: string
     model?: string

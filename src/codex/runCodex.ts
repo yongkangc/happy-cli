@@ -23,6 +23,7 @@ import { MessageBuffer } from "@/ui/ink/messageBuffer";
 import { CodexDisplay } from "@/ui/ink/CodexDisplay";
 import { trimIdent } from "@/utils/trimIdent";
 import type { CodexSessionConfig } from './types';
+import { mapModelMode } from './types';
 import { CHANGE_TITLE_INSTRUCTION } from '@/gemini/constants';
 import { notifyDaemonSessionStarted } from "@/daemon/controlClient";
 import { registerKillSessionHandler } from "@/claude/registerKillSessionHandler";
@@ -643,7 +644,15 @@ export async function runCodex(opts: {
                         config: { mcp_servers: mcpServers }
                     };
                     if (message.mode.model) {
-                        startConfig.model = message.mode.model;
+                        // Map model name using mapModelMode (e.g., "gpt-5.1-codex-max-xhigh" -> model + reasoningEffort)
+                        const { model, reasoningEffort } = mapModelMode(message.mode.model);
+                        if (model) {
+                            startConfig.model = model;
+                        }
+                        if (reasoningEffort) {
+                            startConfig['reasoning-effort'] = reasoningEffort;
+                        }
+                        logger.debug(`[Codex] Mapped model "${message.mode.model}" to model="${model || 'default'}" reasoningEffort="${reasoningEffort || 'default'}"`);
                     }
                     
                     // Check for resume file from multiple sources
